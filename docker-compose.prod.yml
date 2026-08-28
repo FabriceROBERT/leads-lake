@@ -1,0 +1,52 @@
+# Public web stack: Caddy (HTTPS) -> Next front + FastAPI.
+# The pipeline (Airflow / Kafka / Spark) lives in the other compose files.
+#
+#   docker compose -f docker-compose.prod.yml up -d --build
+#
+# Requires in .env:  SITE_DOMAIN, FRONT_URL, LAKE_ROOT=s3://..., AWS_*, FT_*  (see .env.example)
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      SITE_DOMAIN: ${SITE_DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - front
+      - api
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: leads-lake-api:latest
+    restart: unless-stopped
+    env_file: .env
+    expose:
+      - "8000"
+
+  front:
+    build:
+      context: ../leads-lake-front
+      dockerfile: Dockerfile
+      args:
+        # empty -> the browser calls the API on the same origin (via Caddy)
+        NEXT_PUBLIC_API_URL: ""
+    image: leads-lake-front:latest
+    restart: unless-stopped
+    expose:
+      - "3000"
+
+volumes:
+  caddy-data:
+  caddy-config:
+
+networks:
+  default:
+    name: leads-lake-prod

@@ -1,0 +1,67 @@
+# Spark runner (batch Silver/Gold + streaming) + Kafka.
+#   docker compose -f docker-compose.spark.yml build
+#   docker compose -f docker-compose.spark.yml up -d kafka
+#   docker compose -f docker-compose.spark.yml run --rm spark                              # silver_cabinet.py
+#   docker compose -f docker-compose.spark.yml run --rm spark jobs/gold_cabinet_zone.py
+#   docker compose -f docker-compose.spark.yml run --rm spark jobs/stream_france_travail.py
+#
+# Jobs read/write Wasabi (s3a://) directly. The host poller reaches Kafka at
+# localhost:29092 ; jobs in this compose reach it at kafka:9092.
+services:
+  kafka:
+    image: apache/kafka:3.8.1
+    ports:
+      - "29092:29092"
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    environment:
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093,EXTERNAL://:29092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,EXTERNAL://localhost:29092
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+
+  spark:
+    build:
+      context: .
+      dockerfile: docker/spark.Dockerfile
+    image: leads-lake-spark:3.5.3
+    env_file: .env
+    environment:
+      KAFKA_BOOTSTRAP: kafka:9092
+      KAFKA_TOPIC_FT: france_travail.offres
+    working_dir: /opt/spark/work-dir
+    volumes:
+      - ./jobs:/opt/spark/work-dir/jobs
+    entrypoint:
+      - /opt/spark/bin/spark-submit
+      - --driver-memory
+      - 4g
+    command:
+      - jobs/silver_cabinet.py
+
+  # gold/leads_scored -> gold/tiles/leads.pmtiles (tippecanoe). Run on demand:
+  #   docker compose -f docker-compose.spark.yml run --rm tiles
+  tiles:
+    build:
+      context: .
+      dockerfile: docker/tiles.Dockerfile
+    image: leads-lake-tiles:latest
+    env_file: .env
+    profiles: ["tools"]
+
+volumes:
+  kafka-data:
+
+networks:
+  default:
+    name: leads-lake-net

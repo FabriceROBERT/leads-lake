@@ -1,0 +1,9 @@
+.venv/
+_lake/
+data/
+airflow/
+.git/
+.pytest_cache/
+__pycache__/
+*.pyc
+.env

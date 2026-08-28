@@ -1,0 +1,11 @@
+services:
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    volumes:
+      # Local medallion lake, used when LAKE_ROOT=./_lake.
+      # Not needed once LAKE_ROOT points at s3://...
+      - ./_lake:/app/_lake
