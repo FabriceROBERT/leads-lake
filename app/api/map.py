@@ -21,6 +21,10 @@ def map_points(
     ),
     region: str | None = Query(None, description="Code région INSEE (11, 24, …) — filtre par départements"),
     score_min: float | None = Query(None, ge=0),
+    flag: str | None = Query(
+        None,
+        description="signaux, séparés par des virgules : ca_hausse, ca_baisse, rachat, redressement, dirigeant (OU logique)",
+    ),
     limit: int = Query(5000, ge=1, le=300000),
     format: str = Query(
         "geojson",
@@ -38,6 +42,7 @@ def map_points(
         reseau=reseau,
         region=region,
         score_min=score_min,
+        flag=flag,
         limit=limit,
         bulk=format == "bulk",
         count_only=format == "count",
@@ -58,6 +63,7 @@ async def map_clusters(
     reseau: str | None = Query(None, pattern="^(mono|multi)$"),
     region: str | None = Query(None),
     score_min: float | None = Query(None, ge=0),
+    flag: str | None = Query(None),
 ):
     """Grid-aggregated leads for the viewport: numbered clusters + singleton points."""
     return map_controller.map_clusters(
@@ -70,6 +76,7 @@ async def map_clusters(
         reseau=reseau,
         region=region,
         score_min=score_min,
+        flag=flag,
     )
 
 

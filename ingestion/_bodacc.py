@@ -48,6 +48,15 @@ def _detail(a: dict) -> str | None:
     if fam == "dpc":
         d = _as_dict(a.get("depot"))
         return d.get("typeDepot") or None
+    if fam == "vente":
+        v = _as_dict(a.get("vente"))
+        # free text — usually names the fonds, the seller and/or the acquéreur
+        return (
+            v.get("descriptif")
+            or v.get("nomActivite")
+            or a.get("commercant")
+            or "vente / cession de fonds"
+        )
     return None
 
 
@@ -59,13 +68,26 @@ def summarize(annonces: list[dict]) -> dict:
     )
     fams = [a.get("familleavis") for a in annonces]
     proc = next((a for a in annonces if a.get("familleavis") == "collective"), None)
+    modif = next((a for a in annonces if a.get("familleavis") == "modification"), None)
     cutoff = (dt.date.today() - dt.timedelta(days=730)).isoformat()
+
+    def _first_date(fam: str) -> str | None:
+        # annonces is sorted most-recent first
+        return next(
+            (a.get("dateparution") for a in annonces if a.get("familleavis") == fam), None
+        )
+
     return {
         "bodacc_en_procedure": proc is not None,
         "bodacc_procedure_detail": _detail(proc) if proc else None,
         "bodacc_procedure_date": proc.get("dateparution") if proc else None,
         "bodacc_a_depose_comptes": "dpc" in fams,
         "bodacc_derniere_annonce": annonces[0].get("dateparution"),
+        "bodacc_derniere_modif_date": modif.get("dateparution") if modif else None,
+        "bodacc_derniere_modif_detail": _detail(modif) if modif else None,
+        "bodacc_vente_cession_date": _first_date("vente"),
+        "bodacc_radiation_date": _first_date("radiation"),
+        "bodacc_dernier_depot_date": _first_date("dpc"),
         "bodacc_nb_annonces_24m": sum(
             1 for a in annonces if (a.get("dateparution") or "") >= cutoff
         ),

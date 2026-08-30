@@ -1,0 +1,30 @@
+# Dedicated Postgres for the contact-crawl frontier (see SCORING_V2.md §5 bis).
+# Kept apart from the Airflow metadata DB so its migration history and lifecycle
+# are independent.
+#
+#   docker compose -f docker-compose.crawl.yml up -d
+#
+services:
+  crawl-db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: crawl
+      POSTGRES_PASSWORD: crawl
+      POSTGRES_DB: crawl
+    volumes:
+      - crawl-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "crawl"]
+      interval: 5s
+      retries: 10
+    # no host port: reached only as `crawl-db:5432` on leads-lake-net.
+    # For a shell:  docker exec -it leads-lake-crawl-db-1 psql -U crawl
+
+volumes:
+  crawl-db:
+
+networks:
+  default:
+    name: leads-lake-net
+    external: true

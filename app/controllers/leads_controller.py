@@ -42,7 +42,20 @@ def _clean(rec: dict) -> dict:
         elif isinstance(value, np.bool_):
             out[key] = bool(value)
         elif isinstance(value, (np.ndarray, list)):
-            out[key] = list(value)
+            v = list(value)
+            # pyarrow decodes a Spark map<> column (e.g. score_detail) as a list
+            # of (key, value) pairs -> turn it back into a dict
+            if v and all(isinstance(x, tuple) and len(x) == 2 for x in v):
+                out[key] = {
+                    str(k): (
+                        None
+                        if val is None or (isinstance(val, float) and math.isnan(val))
+                        else float(val) if isinstance(val, (int, float, np.number)) else val
+                    )
+                    for k, val in v
+                }
+            else:
+                out[key] = v
         elif isinstance(value, pd.Timestamp):
             out[key] = value.date().isoformat()
         elif isinstance(value, (dt.date, dt.datetime)):

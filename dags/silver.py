@@ -23,9 +23,11 @@ with DAG(
 ) as dag:
     cabinet = spark_task("silver_cabinet", "silver_cabinet.py")
     offre_emploi = spark_task("silver_offre_emploi", "silver_offre_emploi.py")
+    enrichissement = spark_task("silver_enrichissement", "silver_enrichissement.py")
 
     trigger_gold = TriggerDagRunOperator(
         task_id="trigger_gold", trigger_dag_id="gold", wait_for_completion=False
     )
 
     cabinet >> offre_emploi >> trigger_gold
+    cabinet >> enrichissement >> trigger_gold

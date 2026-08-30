@@ -9,3 +9,5 @@ xlrd==2.0.1
 kafka-python==3.0.11
 httpx==0.28.1
 pmtiles==3.7.0
+psycopg[binary]==3.2.3
+ddgs==9.16.0

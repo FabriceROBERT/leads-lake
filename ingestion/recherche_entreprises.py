@@ -57,23 +57,28 @@ def _siren_list(source: str, limit: int | None) -> list[str]:
 def _already_done(
     fs, base: str, source: str = "recherche_entreprises", dataset: str = DATASET
 ) -> set[str]:
+    """Union of sirens across every part file of every data_version — so a
+    multi-day grind resumes cleanly across date rollovers."""
+    root = f"{base}/source={source}/dataset={dataset}"
     try:
-        parts = sorted(fs.ls(f"{base}/source={source}/dataset={dataset}"))
+        dvs = [p for p in fs.ls(root) if "data_version=" in p]
     except FileNotFoundError:
         return set()
-    if not parts:
-        return set()
-    latest = parts[-1]
-    try:
-        files = [f for f in fs.ls(latest) if f.endswith(".parquet")]
-        if not files:
-            return set()
-        df = pd.read_parquet(
-            f"s3://{files[0]}", columns=["siren"], storage_options=settings.storage_options
-        )
-        return {str(s) for s in df["siren"]}
-    except Exception:  # noqa: BLE001
-        return set()
+    done: set[str] = set()
+    for dv in dvs:
+        try:
+            files = [f for f in fs.ls(dv) if f.endswith(".parquet")]
+        except FileNotFoundError:
+            continue
+        for f in files:
+            try:
+                df = pd.read_parquet(
+                    f"s3://{f}", columns=["siren"], storage_options=settings.storage_options
+                )
+                done |= {str(s) for s in df["siren"]}
+            except Exception:  # noqa: BLE001
+                continue
+    return done
 
 
 async def _fetch(client: httpx.AsyncClient, siren: str, sem: asyncio.Semaphore) -> dict | None:
@@ -84,7 +89,7 @@ async def _fetch(client: httpx.AsyncClient, siren: str, sem: asyncio.Semaphore) 
                     f"{BASE}/search", params={"q": siren, "page": 1, "per_page": 1}
                 )
                 if r.status_code == 429:
-                    await asyncio.sleep(1.5 * (attempt + 1))
+                    await asyncio.sleep(2.0 * (attempt + 1))
                     continue
                 if r.status_code != 200:
                     return None
@@ -93,44 +98,75 @@ async def _fetch(client: httpx.AsyncClient, siren: str, sem: asyncio.Semaphore) 
                         return extract(res)
                 return {"siren": siren}  # queried, not found — record it so --resume skips
             except (httpx.HTTPError, ValueError):
-                await asyncio.sleep(1.0 * (attempt + 1))
+                await asyncio.sleep(1.5 * (attempt + 1))
         return None
 
 
-async def _run(sirens: list[str], rps: int) -> list[dict]:
+async def _run(sirens: list[str], rps: int, flush_size: int, on_flush) -> int:
+    """Dispatch at ~rps/s, hand batches of `flush_size` rows to `on_flush`.
+    Returns the total number of kept rows. Hardened: hard per-request timeout,
+    a bounded connection pool, and a 90 s escape hatch if the whole in-flight
+    batch stalls (the api.gouv endpoint slow-lorises under load)."""
     sem = asyncio.Semaphore(rps)
     rows: list[dict] = []
+    total = 0
+    limits = httpx.Limits(max_connections=max(rps * 2, 8), max_keepalive_connections=rps)
+    timeout = httpx.Timeout(20.0, connect=10.0, pool=10.0)
     async with httpx.AsyncClient(
-        timeout=15, headers={"Accept": "application/json"}
+        timeout=timeout, limits=limits, headers={"Accept": "application/json"}
     ) as client:
-        pending = set()
+        pending: set = set()
         start = time.monotonic()
         for i, siren in enumerate(sirens):
-            # crude rate limit: keep dispatch rate <= rps
             target = start + i / rps
             now = time.monotonic()
             if now < target:
                 await asyncio.sleep(target - now)
             pending.add(asyncio.create_task(_fetch(client, siren, sem)))
-            if len(pending) >= rps * 4:
+            if len(pending) >= rps * 3:
                 done, pending = await asyncio.wait(
-                    pending, return_when=asyncio.FIRST_COMPLETED
+                    pending, return_when=asyncio.FIRST_COMPLETED, timeout=90
                 )
-                rows.extend(r.result() for r in done if r.result())
+                if not done:  # whole batch stalled -> drop it, keep going
+                    for t in pending:
+                        t.cancel()
+                    pending = set()
+                    print("  ! batch stalled 90s, dropped", flush=True)
+                for t in done:
+                    try:
+                        r = t.result()
+                    except Exception:  # noqa: BLE001
+                        r = None
+                    if r:
+                        rows.append(r)
+            if len(rows) >= flush_size:
+                on_flush(rows)
+                total += len(rows)
+                rows = []
             if i % 500 == 0:
-                print(f"  {i}/{len(sirens)}", flush=True)
+                print(f"  {i}/{len(sirens)}  (kept {total + len(rows)})", flush=True)
         if pending:
-            done, _ = await asyncio.wait(pending)
-            rows.extend(r.result() for r in done if r.result())
-    return rows
+            done, _ = await asyncio.wait(pending, timeout=120)
+            for t in done:
+                try:
+                    r = t.result()
+                except Exception:  # noqa: BLE001
+                    r = None
+                if r:
+                    rows.append(r)
+    if rows:
+        on_flush(rows)
+        total += len(rows)
+    return total
 
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--source", choices=["signal", "siege", "all"], default="signal")
     ap.add_argument("--limit", type=int, default=None)
-    ap.add_argument("--rps", type=int, default=6)
-    ap.add_argument("--resume", action="store_true", help="skip SIREN already in the latest partition")
+    ap.add_argument("--rps", type=int, default=4)
+    ap.add_argument("--flush", type=int, default=5000, help="rows per part file (checkpoint)")
+    ap.add_argument("--resume", action="store_true", help="skip SIREN already written to any part file")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
 
@@ -150,33 +186,42 @@ def main() -> None:
     if args.dry_run or not sirens:
         return
 
-    t0 = time.time()
-    rows = asyncio.run(_run(sirens, args.rps))
-    print(f"fetched {len(rows):,} rows in {time.time() - t0:.0f}s", flush=True)
-
-    df = pd.DataFrame(rows)
-    for col in ("dirigeants",):
-        if col in df.columns:
-            df[col] = df[col].apply(lambda v: json.dumps(v, ensure_ascii=False) if v else None)
-
     data_version = dt.date.today().isoformat()
-    part = (
+    prefix = (
         f"{base}/source=recherche_entreprises/dataset={DATASET}"
-        f"/data_version={data_version}/part-000.parquet"
+        f"/data_version={data_version}"
     )
-    buf = io.BytesIO()
-    df.to_parquet(buf, index=False)
-    buf.seek(0)
-    with fs.open(part, "wb") as fh:
-        fh.write(buf.read())
-    prefix = part.rsplit("/", 1)[0]
+    try:
+        start_k = len([f for f in fs.ls(prefix) if f.endswith(".parquet")])
+    except FileNotFoundError:
+        start_k = 0
+
+    def _write_part(rows: list[dict], _k=[start_k]) -> None:  # noqa: B006
+        df = pd.DataFrame(rows)
+        if "dirigeants" in df.columns:
+            df["dirigeants"] = df["dirigeants"].apply(
+                lambda v: json.dumps(v, ensure_ascii=False) if v else None
+            )
+        buf = io.BytesIO()
+        df.to_parquet(buf, index=False)
+        buf.seek(0)
+        part = f"{prefix}/part-{_k[0]:03d}.parquet"
+        with fs.open(part, "wb") as fh:
+            fh.write(buf.read())
+        print(f"  flushed {len(df):,} -> s3://{part}", flush=True)
+        _k[0] += 1
+
+    t0 = time.time()
+    total = asyncio.run(_run(sirens, args.rps, args.flush, _write_part))
+    print(f"kept {total:,} rows in {time.time() - t0:.0f}s", flush=True)
+
     with fs.open(f"{prefix}/manifest.json", "w") as fh:
         json.dump(
             {
                 "source": "recherche-entreprises.api.gouv.fr",
                 "dataset": DATASET,
                 "data_version": data_version,
-                "rows": int(len(df)),
+                "rows": int(total),
                 "selection": args.source,
                 "fetched_at": dt.datetime.now(dt.timezone.utc).isoformat(),
             },
@@ -185,7 +230,7 @@ def main() -> None:
         )
     with fs.open(f"{prefix}/_SUCCESS", "w") as fh:
         fh.write("")
-    print(f"wrote s3://{part}  ({len(df):,} rows)")
+    print(f"done: {total:,} rows across part files under s3://{prefix}")
 
 
 if __name__ == "__main__":

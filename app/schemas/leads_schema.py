@@ -68,6 +68,10 @@ class Lead(BaseModel):
     ca: int | None = None
     resultat_net: int | None = None
     annee_comptes: int | None = None
+    ca_n1: int | None = None
+    resultat_n1: int | None = None
+    annee_comptes_n1: int | None = None
+    ca_croissance_pct: float | None = None
     nb_etablissements_ouverts: int | None = None
     est_ess_rne: bool | None = None
     est_qualiopi: bool | None = None
@@ -82,8 +86,23 @@ class Lead(BaseModel):
     bodacc_procedure_date: str | None = None
     bodacc_a_depose_comptes: bool | None = None
     bodacc_derniere_annonce: str | None = None
+    bodacc_derniere_modif_date: str | None = None
+    bodacc_derniere_modif_detail: str | None = None
+    bodacc_vente_cession_date: str | None = None
+    bodacc_radiation_date: str | None = None
+    bodacc_dernier_depot_date: str | None = None
     bodacc_nb_annonces_24m: int | None = None
     bodacc_evenements: list[dict] | None = None
+
+    # scoring V2 — derived in silver/enrichissement + gold/leads_scored
+    flags: list[str] | None = None
+    score_detail: dict | None = None
+
+    # contact crawl — silver/contacts
+    telephone: str | None = None
+    email: str | None = None
+    site_web: str | None = None
+    contact_verifie: bool | None = None
 
 
 class LeadsPage(BaseModel):

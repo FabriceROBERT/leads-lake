@@ -8,5 +8,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 # bake the code in; local dev runs modules from the venv instead
 COPY app/ ./app/
 COPY ingestion/ ./ingestion/
+COPY crawl/ ./crawl/
 
 CMD ["python", "--version"]

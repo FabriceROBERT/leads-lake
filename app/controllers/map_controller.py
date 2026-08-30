@@ -121,6 +121,7 @@ def _apply_lead_filters(
     reseau: str | None = None,
     region: str | None = None,
     score_min: float | None = None,
+    flag: str | None = None,
 ) -> pd.DataFrame:
     """Shared attribute filter chain for the map endpoints (bbox handled apart)."""
     if region and region in REGION_DEPTS and "departement" in df.columns:
@@ -147,6 +148,20 @@ def _apply_lead_filters(
         df = df[n > 1] if reseau == "multi" else df[n <= 1]
     if score_min is not None:
         df = df[df["score"] >= score_min]
+    if flag and "flags" in df.columns:
+        wanted = {
+            _FLAG_KEY[k][2]
+            for k in (x.strip() for x in flag.split(","))
+            if k in _FLAG_KEY
+        }
+        if wanted:
+            df = df[
+                df["flags"].apply(
+                    lambda v: bool(wanted & set(v))
+                    if isinstance(v, (list, np.ndarray))
+                    else False
+                )
+            ]
     return df
 
 # INSEE region code -> its département codes (as they appear in `departement`).
@@ -190,6 +205,7 @@ def map_points(
     reseau: str | None = None,
     region: str | None = None,
     score_min: float | None = None,
+    flag: str | None = None,
     limit: int = 5000,
     bulk: bool = False,
     count_only: bool = False,
@@ -212,7 +228,7 @@ def map_points(
             return {"count": 0} if count_only else {"count": 0, "bande": {}, "segment": {}, "departement": {}}
         m = _mask(
             c, bbox=bbox, segment=segment, code_ape=code_ape, poste=poste,
-            bande=bande, reseau=reseau, region=region, score_min=score_min,
+            bande=bande, reseau=reseau, region=region, score_min=score_min, flag=flag,
         )
         if count_only:
             return {"count": int(m.sum())}
@@ -246,6 +262,7 @@ def map_points(
         reseau=reseau,
         region=region,
         score_min=score_min,
+        flag=flag,
     )
     if bbox:
         try:
@@ -324,6 +341,14 @@ _METIER_KEY = {
     "paie": "pp", "comptabilite": "pc", "juridique": "pj",
     "patrimoine": "pt", "immobilier": "pi",
 }
+# ?flag=<a,b,..> value -> (Gold column, cluster-frame key, human label)
+_FLAG_KEY = {
+    "ca_hausse": ("flag_ca_hausse", "fh", "CA en hausse"),
+    "ca_baisse": ("flag_ca_baisse", "fb", "CA en baisse"),
+    "rachat": ("flag_acquisition", "fx", "a racheté un cabinet"),
+    "redressement": ("flag_redressement", "fr", "en redressement"),
+    "dirigeant": ("flag_nouveau_dirigeant", "fd", "nouveau dirigeant"),
+}
 _cf: dict = {"t": 0.0, "cols": None}
 
 
@@ -355,6 +380,8 @@ def _cluster_frame() -> dict | None:
     }
     for metier, key in _METIER_KEY.items():
         cols[key] = s(f"a_offre_{metier}", False).fillna(False).astype(bool).to_numpy()
+    for gcol, key, _label in _FLAG_KEY.values():
+        cols[key] = s(gcol, False).fillna(False).astype(bool).to_numpy()
     _cf.update(t=time.time(), cols=cols)
     return cols
 
@@ -370,6 +397,7 @@ def _mask(
     reseau: str | None = None,
     region: str | None = None,
     score_min: float | None = None,
+    flag: str | None = None,
 ) -> np.ndarray:
     m = np.ones(len(c["lon"]), dtype=bool)
     if bbox:
@@ -400,6 +428,13 @@ def _mask(
         m &= c["ne"] <= 1
     if score_min is not None:
         m &= c["sc"] >= score_min
+    if flag:
+        keys = [x.strip() for x in flag.split(",") if x.strip() in _FLAG_KEY]
+        if keys:
+            fm = np.zeros(len(c["lon"]), dtype=bool)
+            for k in keys:
+                fm |= c[_FLAG_KEY[k][1]]
+            m &= fm
     return m
 
 
@@ -414,6 +449,7 @@ def map_clusters(
     reseau: str | None = None,
     region: str | None = None,
     score_min: float | None = None,
+    flag: str | None = None,
 ) -> dict:
     """Grid-aggregated leads for the current viewport: numbered clusters where a
     cell holds >1 lead, individual points (with siren) where it holds exactly 1.
@@ -432,6 +468,7 @@ def map_clusters(
         reseau=reseau,
         region=region,
         score_min=score_min,
+        flag=flag,
     )
     total = int(m.sum())
     if total == 0:

@@ -32,8 +32,11 @@ def extract(result: dict) -> dict:
     """Flatten one /search result to the enrichment fields we keep."""
     comp = result.get("complements") or {}
     fin = result.get("finances") or {}
-    year = max(fin) if fin else None
+    years = sorted(fin, reverse=True) if fin else []
+    year = years[0] if years else None
+    year_n1 = years[1] if len(years) > 1 else None
     f = (fin.get(year) or {}) if year else {}
+    f1 = (fin.get(year_n1) or {}) if year_n1 else {}
     dirigeants = result.get("dirigeants") or []
     return {
         "siren": str(result.get("siren")) if result.get("siren") else None,
@@ -53,6 +56,9 @@ def extract(result: dict) -> dict:
         "ca": f.get("ca"),
         "resultat_net": f.get("resultat_net"),
         "annee_comptes": int(year) if year else None,
+        "ca_n1": f1.get("ca"),
+        "resultat_n1": f1.get("resultat_net"),
+        "annee_comptes_n1": int(year_n1) if year_n1 else None,
         "nb_etablissements_ouverts": result.get("nombre_etablissements_ouverts"),
         "est_ess_rne": comp.get("est_ess"),
         "est_qualiopi": comp.get("est_qualiopi"),

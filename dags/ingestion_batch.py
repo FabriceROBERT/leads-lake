@@ -33,22 +33,32 @@ with DAG(
     )
     insee_cj = py_task("insee_categories_juridiques", "ingestion.insee_categories_juridiques")
 
-    # RNE/INPI enrichment (dirigeants, comptes, catégorie…). --source signal keeps
-    # it to actionable leads (~10 min); switch to `--source siege --resume` for the
-    # whole parc.
-    enrich_rne = py_task(
-        "recherche_entreprises",
-        "ingestion.recherche_entreprises",
-        "--source signal --rps 6",
-    )
+    # Financials: bulk file (data.economie.gouv.fr / ratios_inpi_bce). One download,
+    # no per-siren calls -> no WAF ban. Primary source for ca / resultat_net.
+    ratios_fin = py_task("ratios_financiers", "ingestion.ratios_financiers")
+
+    # BODACC "why now" events, whole parc. Checkpointed (part files every --flush),
+    # --resume skips sirens already written.
     enrich_bodacc = py_task(
         "bodacc",
         "ingestion.bodacc",
-        "--source signal --rps 4",
+        "--source siege --resume --rps 4 --flush 5000",
+    )
+
+    # recherche-entreprises: display-only fields (dirigeants, catégorie, Qualiopi).
+    # Off the critical path — that API bans bulk callers; when blocked the script
+    # writes 0 rows and exits 0.
+    enrich_rne = py_task(
+        "recherche_entreprises",
+        "ingestion.recherche_entreprises",
+        "--source siege --resume --rps 2 --flush 5000",
     )
 
     trigger_silver = TriggerDagRunOperator(
         task_id="trigger_silver", trigger_dag_id="silver", wait_for_completion=False
     )
 
-    [sirene_ul, sirene_etab, insee_cj] >> enrich_rne >> enrich_bodacc >> trigger_silver
+    sirene = [sirene_ul, sirene_etab, insee_cj]
+    sirene >> ratios_fin >> trigger_silver
+    sirene >> enrich_bodacc >> trigger_silver
+    sirene >> enrich_rne  # best-effort, not upstream of silver

@@ -42,6 +42,9 @@ class Settings(BaseSettings):
     kafka_bootstrap: str = "localhost:29092"
     kafka_topic_ft: str = "france_travail.offres"
 
+    # Contact-crawl frontier DB (dedicated Postgres, docker-compose.crawl.yml).
+    crawl_db_url: str = "postgresql://crawl:crawl@crawl-db:5432/crawl"
+
     # Wasabi / S3 credentials. Only used when lake_root starts with "s3://".
     s3_endpoint_url: str | None = "https://s3.eu-west-2.wasabisys.com"
     s3_region: str | None = "eu-west-2"
