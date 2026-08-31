@@ -122,8 +122,11 @@ def _apply_lead_filters(
     region: str | None = None,
     score_min: float | None = None,
     flag: str | None = None,
+    q: str | None = None,
 ) -> pd.DataFrame:
     """Shared attribute filter chain for the map endpoints (bbox handled apart)."""
+    if q and q.strip() and "raison_sociale" in df.columns:
+        df = df[df["raison_sociale"].fillna("").str.contains(q.strip(), case=False, regex=False)]
     if region and region in REGION_DEPTS and "departement" in df.columns:
         df = df[df["departement"].astype(str).isin(REGION_DEPTS[region])]
     if segment:
@@ -206,6 +209,7 @@ def map_points(
     region: str | None = None,
     score_min: float | None = None,
     flag: str | None = None,
+    q: str | None = None,
     limit: int = 5000,
     bulk: bool = False,
     count_only: bool = False,
@@ -228,7 +232,7 @@ def map_points(
             return {"count": 0} if count_only else {"count": 0, "bande": {}, "segment": {}, "departement": {}}
         m = _mask(
             c, bbox=bbox, segment=segment, code_ape=code_ape, poste=poste,
-            bande=bande, reseau=reseau, region=region, score_min=score_min, flag=flag,
+            bande=bande, reseau=reseau, region=region, score_min=score_min, flag=flag, q=q,
         )
         if count_only:
             return {"count": int(m.sum())}
@@ -263,6 +267,7 @@ def map_points(
         region=region,
         score_min=score_min,
         flag=flag,
+        q=q,
     )
     if bbox:
         try:
@@ -370,6 +375,7 @@ def _cluster_frame() -> dict | None:
         "lon": df["longitude"].to_numpy("float64"),
         "lat": df["latitude"].to_numpy("float64"),
         "siren": s("siren", "").astype(str).to_numpy(),
+        "rs": s("raison_sociale", "").astype(str).str.lower().to_numpy(),
         "b": s("bande_score", "").astype(str).to_numpy(),
         "sg": s("segment", "").astype(str).to_numpy(),
         "ap": s("code_ape", "").astype(str).to_numpy(),
@@ -398,6 +404,7 @@ def _mask(
     region: str | None = None,
     score_min: float | None = None,
     flag: str | None = None,
+    q: str | None = None,
 ) -> np.ndarray:
     m = np.ones(len(c["lon"]), dtype=bool)
     if bbox:
@@ -435,6 +442,8 @@ def _mask(
             for k in keys:
                 fm |= c[_FLAG_KEY[k][1]]
             m &= fm
+    if q and q.strip():
+        m &= np.char.find(c["rs"].astype(str), q.strip().lower()) >= 0
     return m
 
 
@@ -450,6 +459,7 @@ def map_clusters(
     region: str | None = None,
     score_min: float | None = None,
     flag: str | None = None,
+    q: str | None = None,
 ) -> dict:
     """Grid-aggregated leads for the current viewport: numbered clusters where a
     cell holds >1 lead, individual points (with siren) where it holds exactly 1.
@@ -469,6 +479,7 @@ def map_clusters(
         region=region,
         score_min=score_min,
         flag=flag,
+        q=q,
     )
     total = int(m.sum())
     if total == 0:

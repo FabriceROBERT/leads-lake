@@ -25,6 +25,7 @@ def map_points(
         None,
         description="signaux, séparés par des virgules : ca_hausse, ca_baisse, rachat, redressement, dirigeant (OU logique)",
     ),
+    q: str | None = Query(None, description="recherche sur la raison sociale (sous-chaîne, insensible à la casse)"),
     limit: int = Query(5000, ge=1, le=300000),
     format: str = Query(
         "geojson",
@@ -43,6 +44,7 @@ def map_points(
         region=region,
         score_min=score_min,
         flag=flag,
+        q=q,
         limit=limit,
         bulk=format == "bulk",
         count_only=format == "count",
@@ -64,6 +66,7 @@ async def map_clusters(
     region: str | None = Query(None),
     score_min: float | None = Query(None, ge=0),
     flag: str | None = Query(None),
+    q: str | None = Query(None),
 ):
     """Grid-aggregated leads for the viewport: numbered clusters + singleton points."""
     return map_controller.map_clusters(
@@ -77,6 +80,7 @@ async def map_clusters(
         region=region,
         score_min=score_min,
         flag=flag,
+        q=q,
     )
 
 
